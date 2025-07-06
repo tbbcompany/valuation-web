@@ -102,7 +102,8 @@ if st.button("匯出Excel"):
         st.download_button("下載Excel", file, file_name="財務指標計算結果.xlsx")
 
 if st.button("一鍵清除"):
-    st.experimental_rerun()
+    st.rerun()
+
 
 
 # In[ ]:
