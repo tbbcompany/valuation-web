@@ -1,14 +1,13 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[2]:
+# In[1]:
 
 
 import streamlit as st
 import pandas as pd
 
 st.set_page_config(page_title="財務指標自動計算工具", layout="wide")
-
 st.title("財務指標自動計算工具 (Web 版)")
 
 fields = [
@@ -29,11 +28,23 @@ fields = [
     ("股利總額", "div_total")
 ]
 
-# 側邊輸入
+# 預設值設定：全為空
+defaults = {k: "" for _, k in fields}
+
+# 用 session state 控制欄位
+if "inputs" not in st.session_state:
+    st.session_state.inputs = defaults.copy()
+
 st.sidebar.header("請輸入財務數值")
 inputs = {}
 for name, key in fields:
-    inputs[key] = st.sidebar.text_input(f"{name}", value="")
+    val = st.sidebar.text_input(
+        f"{name}",
+        value=st.session_state.inputs.get(key, ""),
+        key=key
+    )
+    st.session_state.inputs[key] = val
+    inputs[key] = val
 
 def safe_float(val):
     try:
@@ -101,9 +112,10 @@ if st.button("匯出Excel"):
     with open("財務指標計算結果.xlsx", "rb") as file:
         st.download_button("下載Excel", file, file_name="財務指標計算結果.xlsx")
 
+# 一鍵清除功能
 if st.button("一鍵清除"):
+    st.session_state.inputs = defaults.copy()
     st.rerun()
-
 
 
 # In[ ]:
