@@ -1,11 +1,7 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import streamlit as st
 import pandas as pd
+import json
+import io
 
 st.set_page_config(page_title="財務指標自動計算工具", layout="wide")
 st.title("財務指標自動計算工具 (Web 版)")
@@ -28,13 +24,34 @@ fields = [
     ("股利總額", "div_total")
 ]
 
-# 預設值設定：全為空
-defaults = {k: "" for _, k in fields}
+# 可自訂哪些欄位必填
+required_keys = ["price", "shares", "net_income", "equity_total", "sales_total"]
 
-# 用 session state 控制欄位
+# 預設公式
+default_formulas = {
+    "市值(Market Cap)": "price * shares",
+    "PE": "market_cap / net_income if net_income else None",
+    "PB": "market_cap / equity_total if equity_total else None",
+    "PS": "market_cap / sales_total if sales_total else None",
+    "EV": "market_cap + debt - cash",
+    "EV/EBITDA": "ev / ebitda if ebitda else None",
+    "EV/FCF": "ev / fcf if fcf else None",
+    "EV/Sales": "ev / sales_total if sales_total else None",
+    "ROE": "net_income / equity_total if equity_total else None",
+    "ROA": "net_income / assets if assets else None",
+    "殖利率(Yield)": "div_per_share / price if price else None"
+}
+
+# ====== Session State 初始化 ======
+defaults = {k: "" for _, k in fields}
 if "inputs" not in st.session_state:
     st.session_state.inputs = defaults.copy()
+if "formulas" not in st.session_state:
+    st.session_state.formulas = default_formulas.copy()
+if "formula_backup" not in st.session_state:
+    st.session_state.formula_backup = False  # 是否已備份過
 
+# ====== 資料輸入區 ======
 st.sidebar.header("請輸入財務數值")
 inputs = {}
 for name, key in fields:
@@ -54,54 +71,46 @@ def safe_float(val):
 
 v = {k: safe_float(inputs[k]) for _, k in fields}
 
-# 計算財務指標
+# ====== 必填欄位檢查 ======
+missing = [k for k in required_keys if (inputs[k].strip() == "" or v[k] is None)]
+if missing:
+    missnames = "、".join([n for n, k in fields if k in missing])
+    st.warning(f"⚠️ 請填寫以下必要欄位再進行計算：{missnames}")
+    can_calculate = False
+else:
+    can_calculate = True
+
+# ====== 公式計算主體 ======
 results = {}
-results["市值(Market Cap)"] = (
-    v["price"] * v["shares"] if v["price"] is not None and v["shares"] is not None else None
-)
-results["PE"] = (
-    results["市值(Market Cap)"] / v["net_income"] if results["市值(Market Cap)"] is not None and v["net_income"] not in (None, 0) else None
-)
-results["PB"] = (
-    results["市值(Market Cap)"] / v["equity_total"] if results["市值(Market Cap)"] is not None and v["equity_total"] not in (None, 0) else None
-)
-results["PS"] = (
-    results["市值(Market Cap)"] / v["sales_total"] if results["市值(Market Cap)"] is not None and v["sales_total"] not in (None, 0) else None
-)
-results["EV"] = (
-    results["市值(Market Cap)"] + v["debt"] - v["cash"]
-    if results["市值(Market Cap)"] is not None and v["debt"] is not None and v["cash"] is not None else None
-)
-results["EV/EBITDA"] = (
-    results["EV"] / v["ebitda"] if results["EV"] is not None and v["ebitda"] not in (None, 0) else None
-)
-results["EV/FCF"] = (
-    results["EV"] / v["fcf"] if results["EV"] is not None and v["fcf"] not in (None, 0) else None
-)
-results["EV/Sales"] = (
-    results["EV"] / v["sales_total"] if results["EV"] is not None and v["sales_total"] not in (None, 0) else None
-)
-results["ROE"] = (
-    v["net_income"] / v["equity_total"] if v["net_income"] is not None and v["equity_total"] not in (None, 0) else None
-)
-results["ROA"] = (
-    v["net_income"] / v["assets"] if v["net_income"] is not None and v["assets"] not in (None, 0) else None
-)
-results["殖利率(Yield)"] = (
-    v["div_per_share"] / v["price"] if v["div_per_share"] is not None and v["price"] not in (None, 0) else None
-)
+if can_calculate:
+    local_vars = v.copy()
+    try:
+        market_cap = eval(st.session_state.formulas["市值(Market Cap)"], {}, local_vars)
+        local_vars["market_cap"] = market_cap
+        results["市值(Market Cap)"] = market_cap
+        for k in st.session_state.formulas:
+            if k == "市值(Market Cap)":
+                continue
+            val = eval(st.session_state.formulas[k], {}, local_vars)
+            results[k] = val
+            local_vars[k.lower().replace("/", "_").replace("(", "").replace(")", "").replace(" ", "_")] = val
+    except Exception as e:
+        st.error(f"計算發生錯誤: {e}")
 
-# 顯示結果
+# ====== 結果顯示 ======
 st.header("自動計算指標")
-df = pd.DataFrame([
-    {"指標": k, "計算結果": (f"{val:,.4f}" if isinstance(val, float) else "")}
-    for k, val in results.items()
-])
-st.table(df)
+if can_calculate:
+    df = pd.DataFrame([
+        {"指標": k, "計算結果": (f"{val:,.4f}" if isinstance(val, float) else "")}
+        for k, val in results.items()
+    ])
+    st.table(df)
+else:
+    st.info("請先填完必要欄位，才能自動計算財務指標。")
 
-# 匯出功能
+# ====== 匯出 Excel ======
 st.header("匯出 Excel")
-if st.button("匯出Excel"):
+if can_calculate and st.button("匯出Excel"):
     df_input = pd.DataFrame(list(v.items()), columns=["項目", "輸入值"])
     df_out = pd.DataFrame([
         (k, (f"{val:,.4f}" if isinstance(val, float) else "")) for k, val in results.items()
@@ -112,10 +121,51 @@ if st.button("匯出Excel"):
     with open("財務指標計算結果.xlsx", "rb") as file:
         st.download_button("下載Excel", file, file_name="財務指標計算結果.xlsx")
 
-# 一鍵清除功能
+# ====== 一鍵清除功能 ======
 if st.button("一鍵清除"):
     st.session_state.inputs = defaults.copy()
     st.rerun()
 
+# ====== 管理員公式設定區（強制備份/匯出/還原/目前公式） ======
+with st.expander("管理員功能（公式設定/備份/還原）"):
+    st.markdown("**目前所有公式如下：**")
+    st.code(json.dumps(st.session_state.formulas, ensure_ascii=False, indent=2), language="json")
 
-# In[ ]:
+    pwd = st.text_input("請輸入管理密碼", type="password")
+    if pwd == "yourpassword":   # ← 請改成你自己的密碼
+        st.success("管理員已登入。為保險請先按下『匯出公式』完成備份，才可進行修改或還原！")
+
+        # 備份下載
+        if not st.session_state.formula_backup:
+            st.info("請先下載一次公式備份才能進行編輯或還原。")
+            if st.button("匯出目前公式（下載json備份）"):
+                backup = json.dumps(st.session_state.formulas, ensure_ascii=False, indent=2)
+                st.download_button("下載公式.json", io.BytesIO(backup.encode("utf-8")), file_name="公式備份.json")
+                st.session_state.formula_backup = True
+        else:
+            # 還原公式上傳
+            uploaded_file = st.file_uploader("上傳備份公式（.json）進行還原", type=["json"])
+            if uploaded_file:
+                try:
+                    data = json.load(uploaded_file)
+                    if isinstance(data, dict):
+                        st.session_state.formulas = data
+                        st.success("已成功還原所有公式，立即生效！")
+                        st.session_state.formula_backup = False  # 還原後再強制下次編輯前備份
+                        st.rerun()
+                    else:
+                        st.error("檔案格式錯誤，請上傳正確的公式json。")
+                except Exception as e:
+                    st.error(f"讀取公式檔錯誤：{e}")
+
+            st.markdown("---")
+            # 可編輯欄位
+            for k in st.session_state.formulas:
+                new_formula = st.text_input(f"{k} 公式", value=st.session_state.formulas[k], key=f"formula_{k}")
+                st.session_state.formulas[k] = new_formula
+            if st.button("儲存公式（即時生效）"):
+                st.success("已更新公式，立即套用！")
+                st.session_state.formula_backup = False  # 儲存後再強制下次編輯前備份
+                st.rerun()
+    else:
+        st.info("僅管理員可修改、還原、編輯公式，請輸入正確密碼。")
