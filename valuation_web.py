@@ -27,6 +27,29 @@ fields = [
 # 可自訂哪些欄位必填
 required_keys = ["price", "shares", "net_income", "equity_total", "sales_total"]
 
+# 公式→中文說明對應表
+formula_hints = {
+    "price": "股價",
+    "shares": "流通股數",
+    "bvps": "每股帳面價值",
+    "sales_per_share": "每股營收",
+    "eps": "每股盈餘(EPS)",
+    "net_income": "淨利總額",
+    "sales_total": "營收總額",
+    "equity_total": "淨值總額",
+    "cash": "現金與約當現金",
+    "debt": "有息負債",
+    "ebitda": "EBITDA",
+    "fcf": "FCF",
+    "assets": "資產總額",
+    "div_per_share": "每股現金股利",
+    "div_total": "股利總額",
+    "market_cap": "市值",
+    "ev": "企業價值(EV)",
+    # 避免後面 eval 時出現 None
+    "None": "空值"
+}
+
 # 預設公式
 default_formulas = {
     "市值(Market Cap)": "price * shares",
@@ -50,6 +73,8 @@ if "formulas" not in st.session_state:
     st.session_state.formulas = default_formulas.copy()
 if "formula_backup" not in st.session_state:
     st.session_state.formula_backup = False  # 是否已備份過
+if "admin_pwd_fail" not in st.session_state:
+    st.session_state.admin_pwd_fail = False  # 密碼失敗提示 flag
 
 # ====== 資料輸入區 ======
 st.sidebar.header("請輸入財務數值")
@@ -126,46 +151,63 @@ if st.button("一鍵清除"):
     st.session_state.inputs = defaults.copy()
     st.rerun()
 
-# ====== 管理員公式設定區（強制備份/匯出/還原/目前公式） ======
+# ====== 管理員公式設定區（強制備份/匯出/還原/目前公式/密碼提示/公式轉換） ======
 with st.expander("管理員功能（公式設定/備份/還原）"):
     st.markdown("**目前所有公式如下：**")
+    # ====== 顯示「一般人看得懂」的公式說明 ======
+    for k, expr in st.session_state.formulas.items():
+        # 將公式中的英文欄位自動換成中文
+        show_expr = expr
+        for en, zh in formula_hints.items():
+            show_expr = show_expr.replace(en, zh)
+        st.write(f"**{k}：** {show_expr}")
+
     st.code(json.dumps(st.session_state.formulas, ensure_ascii=False, indent=2), language="json")
 
+    # ====== 管理員密碼區 ======
     pwd = st.text_input("請輸入管理密碼", type="password")
-    if pwd == "yourpassword":   # ← 請改成你自己的密碼
-        st.success("管理員已登入。為保險請先按下『匯出公式』完成備份，才可進行修改或還原！")
+    admin_password = "tbb90538679"   # 請換成你自己的密碼
 
-        # 備份下載
-        if not st.session_state.formula_backup:
-            st.info("請先下載一次公式備份才能進行編輯或還原。")
-            if st.button("匯出目前公式（下載json備份）"):
-                backup = json.dumps(st.session_state.formulas, ensure_ascii=False, indent=2)
-                st.download_button("下載公式.json", io.BytesIO(backup.encode("utf-8")), file_name="公式備份.json")
-                st.session_state.formula_backup = True
+    if pwd:
+        if pwd == admin_password:
+            st.session_state.admin_pwd_fail = False
+            st.success("管理員已登入。為保險請先按下『匯出公式』完成備份，才可進行修改或還原！")
+            # 備份下載
+            if not st.session_state.formula_backup:
+                st.info("請先下載一次公式備份才能進行編輯或還原。")
+                if st.button("匯出目前公式（下載json備份）"):
+                    backup = json.dumps(st.session_state.formulas, ensure_ascii=False, indent=2)
+                    st.download_button("下載公式.json", io.BytesIO(backup.encode("utf-8")), file_name="公式備份.json")
+                    st.session_state.formula_backup = True
+            else:
+                # 還原公式上傳
+                uploaded_file = st.file_uploader("上傳備份公式（.json）進行還原", type=["json"])
+                if uploaded_file:
+                    try:
+                        data = json.load(uploaded_file)
+                        if isinstance(data, dict):
+                            st.session_state.formulas = data
+                            st.success("已成功還原所有公式，立即生效！")
+                            st.session_state.formula_backup = False
+                            st.rerun()
+                        else:
+                            st.error("檔案格式錯誤，請上傳正確的公式json。")
+                    except Exception as e:
+                        st.error(f"讀取公式檔錯誤：{e}")
+
+                st.markdown("---")
+                # 可編輯欄位
+                for k in st.session_state.formulas:
+                    new_formula = st.text_input(f"{k} 公式", value=st.session_state.formulas[k], key=f"formula_{k}")
+                    st.session_state.formulas[k] = new_formula
+                if st.button("儲存公式（即時生效）"):
+                    st.success("已更新公式，立即套用！")
+                    st.session_state.formula_backup = False  # 儲存後再強制下次編輯前備份
+                    st.rerun()
         else:
-            # 還原公式上傳
-            uploaded_file = st.file_uploader("上傳備份公式（.json）進行還原", type=["json"])
-            if uploaded_file:
-                try:
-                    data = json.load(uploaded_file)
-                    if isinstance(data, dict):
-                        st.session_state.formulas = data
-                        st.success("已成功還原所有公式，立即生效！")
-                        st.session_state.formula_backup = False  # 還原後再強制下次編輯前備份
-                        st.rerun()
-                    else:
-                        st.error("檔案格式錯誤，請上傳正確的公式json。")
-                except Exception as e:
-                    st.error(f"讀取公式檔錯誤：{e}")
-
-            st.markdown("---")
-            # 可編輯欄位
-            for k in st.session_state.formulas:
-                new_formula = st.text_input(f"{k} 公式", value=st.session_state.formulas[k], key=f"formula_{k}")
-                st.session_state.formulas[k] = new_formula
-            if st.button("儲存公式（即時生效）"):
-                st.success("已更新公式，立即套用！")
-                st.session_state.formula_backup = False  # 儲存後再強制下次編輯前備份
-                st.rerun()
-    else:
+            st.session_state.admin_pwd_fail = True
+    # ====== 密碼錯誤提示 ======
+    if st.session_state.admin_pwd_fail:
+        st.error("密碼錯誤，請重新輸入！")
+    elif not pwd:
         st.info("僅管理員可修改、還原、編輯公式，請輸入正確密碼。")
