@@ -122,6 +122,10 @@ if can_calculate:
             val = eval(st.session_state.formulas[k], {}, local_vars)
             results[k] = val
             local_vars[k.lower().replace("/", "_").replace("(", "").replace(")", "").replace(" ", "_")] = val
+        # 新增：自動填入空公式也要顯示
+        for f in st.session_state.fields:
+            if f['key'] not in results and f['key'] in st.session_state.formulas:
+                results[f['key']] = eval(st.session_state.formulas[f['key']], {}, local_vars)
     except Exception as e:
         st.error(f"計算發生錯誤: {e}")
 
@@ -185,7 +189,10 @@ with st.expander("管理員功能（欄位/公式/匯出/還原）"):
                 if new_name and new_key and not any(f['key'] == new_key for f in st.session_state.fields):
                     st.session_state.fields.append({"name": new_name, "key": new_key, "required": new_required})
                     st.session_state.inputs[new_key] = ""
-                    st.success(f"已新增欄位：{new_name} ({new_key})")
+                    # 新欄位自動產生一條公式（預設為 None）
+                    if new_key not in st.session_state.formulas:
+                        st.session_state.formulas[new_key] = "None"
+                    st.success(f"已新增欄位：{new_name} ({new_key})，並自動新增一條空公式")
                     st.rerun()
                 elif any(f['key'] == new_key for f in st.session_state.fields):
                     st.error("此英文key已存在，請換一個。")
@@ -199,7 +206,10 @@ with st.expander("管理員功能（欄位/公式/匯出/還原）"):
                 del_key = st.session_state.fields[del_options.index(del_choice)]['key']
                 st.session_state.fields = [f for f in st.session_state.fields if f['key'] != del_key]
                 st.session_state.inputs.pop(del_key, None)
-                st.success("已刪除欄位，立即生效")
+                # 同步移除公式
+                if del_key in st.session_state.formulas:
+                    st.session_state.formulas.pop(del_key)
+                st.success("已刪除欄位（並同步移除對應公式），立即生效")
                 st.rerun()
             # 欄位匯出
             if st.button("匯出欄位清單"):
@@ -216,6 +226,11 @@ with st.expander("管理員功能（欄位/公式/匯出/還原）"):
                         for k in list(st.session_state.inputs.keys()):
                             if k not in [f["key"] for f in data]:
                                 st.session_state.inputs.pop(k)
+                        # 欄位還原同步移除不存在的公式
+                        cur_keys = [f["key"] for f in data]
+                        for k in list(st.session_state.formulas.keys()):
+                            if k not in cur_keys and k not in default_formulas:
+                                st.session_state.formulas.pop(k)
                         st.success("欄位清單已還原，立即生效")
                         st.rerun()
                     else:
