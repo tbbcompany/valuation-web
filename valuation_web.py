@@ -6,28 +6,26 @@ import io
 st.set_page_config(page_title="財務指標自動計算工具", layout="wide")
 st.title("財務指標自動計算工具 (Web 版)")
 
-fields = [
-    ("股價", "price"),
-    ("流通股數", "shares"),
-    ("每股帳面價值", "bvps"),
-    ("每股營收", "sales_per_share"),
-    ("每股盈餘(EPS)", "eps"),
-    ("淨利總額", "net_income"),
-    ("營收總額", "sales_total"),
-    ("淨值總額", "equity_total"),
-    ("現金與約當現金", "cash"),
-    ("有息負債", "debt"),
-    ("EBITDA", "ebitda"),
-    ("FCF", "fcf"),
-    ("資產總額", "assets"),
-    ("每股現金股利", "div_per_share"),
-    ("股利總額", "div_total")
+# --- 預設欄位與欄位管理 ---
+default_fields = [
+    {"name": "股價", "key": "price", "required": True},
+    {"name": "流通股數", "key": "shares", "required": True},
+    {"name": "每股帳面價值", "key": "bvps", "required": False},
+    {"name": "每股營收", "key": "sales_per_share", "required": False},
+    {"name": "每股盈餘(EPS)", "key": "eps", "required": False},
+    {"name": "淨利總額", "key": "net_income", "required": True},
+    {"name": "營收總額", "key": "sales_total", "required": True},
+    {"name": "淨值總額", "key": "equity_total", "required": True},
+    {"name": "現金與約當現金", "key": "cash", "required": False},
+    {"name": "有息負債", "key": "debt", "required": False},
+    {"name": "EBITDA", "key": "ebitda", "required": False},
+    {"name": "FCF", "key": "fcf", "required": False},
+    {"name": "資產總額", "key": "assets", "required": False},
+    {"name": "每股現金股利", "key": "div_per_share", "required": False},
+    {"name": "股利總額", "key": "div_total", "required": False},
 ]
 
-# 可自訂哪些欄位必填
-required_keys = ["price", "shares", "net_income", "equity_total", "sales_total"]
-
-# 公式→中文說明對應表
+# 公式→中文說明對應表（欄位與公式管理都用）
 formula_hints = {
     "price": "股價",
     "shares": "流通股數",
@@ -49,7 +47,7 @@ formula_hints = {
     "None": "空值"
 }
 
-# 預設公式
+# --- 預設公式 ---
 default_formulas = {
     "市值(Market Cap)": "price * shares",
     "PE": "market_cap / net_income if net_income else None",
@@ -65,11 +63,12 @@ default_formulas = {
 }
 
 # ====== Session State 初始化 ======
-defaults = {k: "" for _, k in fields}
-if "inputs" not in st.session_state:
-    st.session_state.inputs = defaults.copy()
+if "fields" not in st.session_state:
+    st.session_state.fields = default_fields.copy()
 if "formulas" not in st.session_state:
     st.session_state.formulas = default_formulas.copy()
+if "inputs" not in st.session_state:
+    st.session_state.inputs = {f['key']: "" for f in st.session_state.fields}
 if "formula_backup" not in st.session_state:
     st.session_state.formula_backup = False  # 是否已備份過
 if "admin_pwd_fail" not in st.session_state:
@@ -77,17 +76,20 @@ if "admin_pwd_fail" not in st.session_state:
 if "admin_mode" not in st.session_state:
     st.session_state.admin_mode = False      # 管理員登入狀態
 
+# 取得必填欄位
+required_keys = [f['key'] for f in st.session_state.fields if f.get("required")]
+
 # ====== 資料輸入區 ======
 st.sidebar.header("請輸入財務數值")
 inputs = {}
-for name, key in fields:
+for f in st.session_state.fields:
     val = st.sidebar.text_input(
-        f"{name}",
-        value=st.session_state.inputs.get(key, ""),
-        key=key
+        f"{f['name']}",
+        value=st.session_state.inputs.get(f['key'], ""),
+        key=f['key']
     )
-    st.session_state.inputs[key] = val
-    inputs[key] = val
+    st.session_state.inputs[f['key']] = val
+    inputs[f['key']] = val
 
 def safe_float(val):
     try:
@@ -95,12 +97,12 @@ def safe_float(val):
     except:
         return None
 
-v = {k: safe_float(inputs[k]) for _, k in fields}
+v = {f['key']: safe_float(inputs[f['key']]) for f in st.session_state.fields}
 
 # ====== 必填欄位檢查 ======
 missing = [k for k in required_keys if (inputs[k].strip() == "" or v[k] is None)]
 if missing:
-    missnames = "、".join([n for n, k in fields if k in missing])
+    missnames = "、".join([f['name'] for f in st.session_state.fields if f['key'] in missing])
     st.warning(f"⚠️ 請填寫以下必要欄位再進行計算：{missnames}")
     can_calculate = False
 else:
@@ -149,27 +151,81 @@ if can_calculate and st.button("匯出Excel"):
 
 # ====== 一鍵清除功能 ======
 if st.button("一鍵清除"):
-    st.session_state.inputs = defaults.copy()
+    st.session_state.inputs = {f['key']: "" for f in st.session_state.fields}
     st.rerun()
 
-# ====== 管理員公式設定區（強制備份/匯出/還原/目前公式/密碼提示/公式轉換/取消登出） ======
-with st.expander("管理員功能（公式設定/備份/還原）"):
+# ====== 管理員欄位/公式/匯出還原管理 ======
+with st.expander("管理員功能（欄位/公式/匯出/還原）"):
     st.markdown("**目前所有公式如下：**")
-    # ====== 顯示「一般人看得懂」的公式說明 ======
     for k, expr in st.session_state.formulas.items():
         show_expr = expr
         for en, zh in formula_hints.items():
             show_expr = show_expr.replace(en, zh)
         st.write(f"**{k}：** {show_expr}")
-
     st.code(json.dumps(st.session_state.formulas, ensure_ascii=False, indent=2), language="json")
 
-    # ====== 管理員密碼區或管理員編輯模式 ======
-    admin_password = "tbb1840"   # 請換成你自己的密碼
-    # 如果已登入 admin_mode
+    admin_password = "tbb1840"   # 改成你自己的密碼
+
+    # ====== 欄位動態管理（需登入） ======
     if st.session_state.admin_mode:
-        st.success("管理員已登入。為保險請先按下『匯出公式』完成備份，才可進行修改或還原！")
-        # 備份下載
+        st.success("管理員已登入。")
+        with st.expander("欄位管理", expanded=True):
+            st.write("目前所有欄位：")
+            st.table(pd.DataFrame(st.session_state.fields))
+            # 新增欄位
+            st.subheader("新增欄位")
+            col1, col2, col3 = st.columns([2,2,1])
+            with col1:
+                new_name = st.text_input("欄位中文名稱", key="addfield_name")
+            with col2:
+                new_key = st.text_input("欄位英文key", key="addfield_key")
+            with col3:
+                new_required = st.checkbox("必填", value=False, key="addfield_required")
+            if st.button("新增欄位"):
+                if new_name and new_key and not any(f['key'] == new_key for f in st.session_state.fields):
+                    st.session_state.fields.append({"name": new_name, "key": new_key, "required": new_required})
+                    st.session_state.inputs[new_key] = ""
+                    st.success(f"已新增欄位：{new_name} ({new_key})")
+                    st.rerun()
+                elif any(f['key'] == new_key for f in st.session_state.fields):
+                    st.error("此英文key已存在，請換一個。")
+                else:
+                    st.error("欄位名稱與key皆需填寫。")
+            # 刪除欄位
+            st.subheader("刪除欄位")
+            del_options = [f"{f['name']} ({f['key']})" for f in st.session_state.fields]
+            del_choice = st.selectbox("選擇要刪除的欄位", del_options, key="del_field_choice")
+            if st.button("刪除選定欄位"):
+                del_key = st.session_state.fields[del_options.index(del_choice)]['key']
+                st.session_state.fields = [f for f in st.session_state.fields if f['key'] != del_key]
+                st.session_state.inputs.pop(del_key, None)
+                st.success("已刪除欄位，立即生效")
+                st.rerun()
+            # 欄位匯出
+            if st.button("匯出欄位清單"):
+                field_json = json.dumps(st.session_state.fields, ensure_ascii=False, indent=2)
+                st.download_button("下載欄位清單.json", io.BytesIO(field_json.encode("utf-8")), file_name="欄位清單.json")
+            # 欄位還原
+            up_field_file = st.file_uploader("上傳欄位清單(.json)進行還原", type=["json"], key="fields_restore")
+            if up_field_file:
+                try:
+                    data = json.load(up_field_file)
+                    if isinstance(data, list) and all("key" in d and "name" in d for d in data):
+                        st.session_state.fields = data
+                        # 移除不存在欄位的 inputs
+                        for k in list(st.session_state.inputs.keys()):
+                            if k not in [f["key"] for f in data]:
+                                st.session_state.inputs.pop(k)
+                        st.success("欄位清單已還原，立即生效")
+                        st.rerun()
+                    else:
+                        st.error("檔案格式錯誤，請確認上傳正確的欄位清單json。")
+                except Exception as e:
+                    st.error(f"讀取欄位檔錯誤：{e}")
+
+        # ====== 公式備份/還原、修改區 ======
+        st.markdown("---")
+        st.subheader("公式管理（同上）")
         if not st.session_state.formula_backup:
             st.info("請先下載一次公式備份才能進行編輯或還原。")
             if st.button("匯出目前公式（下載json備份）"):
@@ -178,7 +234,7 @@ with st.expander("管理員功能（公式設定/備份/還原）"):
                 st.session_state.formula_backup = True
         else:
             # 還原公式上傳
-            uploaded_file = st.file_uploader("上傳備份公式（.json）進行還原", type=["json"])
+            uploaded_file = st.file_uploader("上傳備份公式（.json）進行還原", type=["json"], key="formulas_restore")
             if uploaded_file:
                 try:
                     data = json.load(uploaded_file)
@@ -191,7 +247,6 @@ with st.expander("管理員功能（公式設定/備份/還原）"):
                         st.error("檔案格式錯誤，請上傳正確的公式json。")
                 except Exception as e:
                     st.error(f"讀取公式檔錯誤：{e}")
-
             st.markdown("---")
             # 可編輯欄位
             for k in st.session_state.formulas:
@@ -201,8 +256,8 @@ with st.expander("管理員功能（公式設定/備份/還原）"):
             with btn1:
                 if st.button("儲存公式（即時生效）"):
                     st.success("已更新公式，立即套用！")
-                    st.session_state.formula_backup = False  # 儲存後再強制下次編輯前備份
-                    st.session_state.admin_mode = False       # 儲存後自動登出
+                    st.session_state.formula_backup = False
+                    st.session_state.admin_mode = False
                     st.rerun()
             with btn2:
                 if st.button("取消/登出"):
@@ -222,4 +277,4 @@ with st.expander("管理員功能（公式設定/備份/還原）"):
         if st.session_state.admin_pwd_fail:
             st.error("密碼錯誤，請重新輸入！")
         elif not pwd:
-            st.info("僅管理員可修改、還原、編輯公式，請輸入正確密碼。")
+            st.info("僅管理員可修改、還原、編輯公式/欄位，請輸入正確密碼。")
